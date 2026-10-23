@@ -20,6 +20,7 @@ import { splitBillingExprAndRequestRules } from '@/features/pricing/lib/billing-
 
 import { safeJsonParse } from '../utils/json-parser'
 import { formatPricingNumber } from './pricing-format'
+import { tryParsePerRequestExpr } from './model-pricing-core'
 
 export type ModelPricingSnapshotInput = {
   modelPrice: string
@@ -238,6 +239,31 @@ export const buildModelSnapshots = ({
       const fullExpr = billingExprMap[name] || ''
       const { billingExpr: pureExpr, requestRuleExpr } =
         splitBillingExprAndRequestRules(fullExpr)
+
+      // Check if this is a per-request expression with request rules.
+      // The expression might have a per-request base (tier("base", ...)) with
+      // additional request rule conditions.
+      const perRequestInfo = tryParsePerRequestExpr(pureExpr)
+      if (perRequestInfo) {
+        // This is per-request with request rules: display as per-request mode
+        // with the extracted price.
+        return {
+          name,
+          billingMode: 'per-request',
+          billingExpr: pureExpr,
+          requestRuleExpr,
+          price: perRequestInfo.price,
+          ratio,
+          cacheRatio: cache,
+          createCacheRatio: createCache,
+          completionRatio: completion,
+          imageRatio: image,
+          audioRatio: audio,
+          audioCompletionRatio: audioCompletion,
+          hasConflict: false,
+        }
+      }
+
       return {
         name,
         billingMode: 'tiered_expr',

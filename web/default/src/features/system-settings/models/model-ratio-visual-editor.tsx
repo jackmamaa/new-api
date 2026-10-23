@@ -48,6 +48,7 @@ import {
 } from '@/components/data-table'
 import { Button } from '@/components/ui/button'
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
+import { buildPerRequestExpr } from './model-pricing-core'
 import { useMediaQuery } from '@/hooks'
 
 import { safeJsonParse } from '../utils/json-parser'
@@ -537,6 +538,23 @@ const ModelRatioVisualEditorComponent = forwardRef<
           setIfPresent(imageMap, name, data.imageRatio)
           setIfPresent(audioMap, name, data.audioRatio)
           setIfPresent(audioCompletionMap, name, data.audioCompletionRatio)
+        } else if (
+          data.billingMode === 'per-request' &&
+          data.requestRuleExpr
+        ) {
+          // Per-request with request rules: save as tiered_expr with a
+          // combined billing expression so the backend expression engine
+          // handles both the fixed price and the request rule multipliers.
+          const baseExpr = buildPerRequestExpr(data.price || '0')
+          if (baseExpr) {
+            const combined = combineBillingExpr(baseExpr, data.requestRuleExpr)
+            if (combined) {
+              billingModeMap[name] = 'tiered_expr'
+              billingExprMap[name] = combined
+            }
+          }
+          // Also save the price as fallback.
+          setIfPresent(priceMap, name, data.price)
         } else if (data.price && data.price !== '') {
           setIfPresent(priceMap, name, data.price)
         } else {

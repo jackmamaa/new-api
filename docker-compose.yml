@@ -16,12 +16,11 @@ version: '3.4' # For compatibility with older Docker versions
 
 services:
   new-api:
-    image: calciumion/new-api:latest
+    build: .
+    image: new-api:latest
     container_name: new-api
     restart: always
     command: --log-dir /app/logs
-    ports:
-      - "3000:3000"
     volumes:
       - ./data:/data
       - ./logs:/app/logs
@@ -64,6 +63,8 @@ services:
     container_name: redis
     restart: always
     command: ["redis-server", "--requirepass", "123456"]  # ⚠️ IMPORTANT: Change this password in production!
+    ports:
+      - "127.0.0.1:6379:6379"
     networks:
       - new-api-network
 
@@ -76,7 +77,7 @@ services:
       POSTGRES_PASSWORD: 123456  # ⚠️ IMPORTANT: Change this password in production!
       POSTGRES_DB: new-api
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - ./postgres_data:/var/lib/postgresql/data
     networks:
       - new-api-network
 #    ports:
@@ -113,10 +114,22 @@ services:
 #      - "8123:8123"  # HTTP interface, uncomment if you need external access
 #      - "9000:9000"  # Native interface used by the LOG_SQL_DSN example above
 
-volumes:
-  pg_data:
-#  mysql_data:
-#  clickhouse_data:
+  caddy:
+    image: caddy:latest
+    container_name: caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile  # Caddyfile 配置文件
+      - ./caddy_config:/config              # Caddy 配置持久化
+      - ./caddy_data:/data                  # Caddy 数据持久化（含证书）
+    networks:
+      - new-api-network
+    depends_on:
+      - new-api
 
 networks:
   new-api-network:

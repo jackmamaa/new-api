@@ -1193,6 +1193,9 @@ type RuleGroupCardProps = {
   index: number
   onChange: (next: RequestRuleGroup) => void
   onRemove: () => void
+  /** When provided, shows a second "Fixed price" input synchronized with the
+   *  multiplier. The multiplier is computed as fixedPrice ÷ basePrice. */
+  basePrice?: number
 }
 
 function RuleGroupCard({
@@ -1200,6 +1203,7 @@ function RuleGroupCard({
   index,
   onChange,
   onRemove,
+  basePrice,
 }: RuleGroupCardProps) {
   const { t } = useTranslation()
 
@@ -1220,6 +1224,24 @@ function RuleGroupCard({
         timeMode ? createEmptyTimeCondition() : createEmptyCondition(),
       ],
     })
+  }
+
+  const multiplier = parseFloat(group.multiplier)
+  const hasValidBasePrice = basePrice !== undefined && basePrice > 0
+  const fixedPrice =
+    hasValidBasePrice && !isNaN(multiplier) ? multiplier * basePrice : NaN
+
+  const handleFixedPriceChange = (nextFixedPrice: number) => {
+    if (!hasValidBasePrice) return
+    const nextMultiplier = nextFixedPrice / basePrice
+    onChange({
+      ...group,
+      multiplier: String(nextMultiplier),
+    })
+  }
+
+  const handleMultiplierChange = (value: number) => {
+    onChange({ ...group, multiplier: String(value) })
   }
 
   return (
@@ -1274,18 +1296,39 @@ function RuleGroupCard({
         </div>
       </div>
 
-      <div className='flex items-center gap-2'>
-        <Label className='text-xs'>{t('Multiplier')}</Label>
-        <DraftNumberInput
-          min={0}
-          step={0.000001}
-          value={group.multiplier}
-          onValueChange={(value) =>
-            onChange({ ...group, multiplier: String(value) })
-          }
-          className='w-32'
-          placeholder='1.0'
-        />
+      <div className='flex flex-wrap items-center gap-3'>
+        <div className='flex items-center gap-2'>
+          <Label className='text-xs'>{t('Multiplier')}</Label>
+          <DraftNumberInput
+            min={0}
+            step={0.000001}
+            value={group.multiplier}
+            onValueChange={handleMultiplierChange}
+            className='w-28'
+            placeholder='1.0'
+          />
+        </div>
+
+        {hasValidBasePrice && (
+          <div className='flex items-center gap-2'>
+            <span className='text-muted-foreground text-xs'>/</span>
+            <Label className='text-xs'>{t('Fixed price')}</Label>
+            <div className='relative'>
+              <span className='text-muted-foreground pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs'>
+                $
+              </span>
+              <DraftNumberInput
+                min={0}
+                step={0.000001}
+                value={!isNaN(fixedPrice) ? fixedPrice : ''}
+                onValueChange={handleFixedPriceChange}
+                className='w-28 pl-5'
+                placeholder='0.00'
+              />
+            </div>
+          </div>
+        )}
+
         <span className='text-muted-foreground text-xs'>
           {t('Final cost = base × multiplier when conditions match')}
         </span>
@@ -1620,6 +1663,11 @@ function LlmPromptHelper({ modelName }: LlmPromptHelperProps) {
 // ---------------------------------------------------------------------------
 // Main editor
 // ---------------------------------------------------------------------------
+
+export type { RuleGroupCardProps, RequestRuleGroup }
+
+// Re-export RuleGroupCard for reuse in other pricing editors (e.g. per-request).
+export { RuleGroupCard }
 
 export type TieredPricingEditorProps = {
   modelName?: string

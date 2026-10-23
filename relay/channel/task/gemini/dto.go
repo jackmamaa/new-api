@@ -1,18 +1,29 @@
 package gemini
 
+// VeoInlineData represents inline image bytes in the Gemini Veo request shape.
+type VeoInlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
+}
+
 // VeoImageInput represents an image input for Veo image-to-video.
 // Used by both Gemini and Vertex adaptors.
 type VeoImageInput struct {
-	BytesBase64Encoded string `json:"bytesBase64Encoded"`
-	MimeType           string `json:"mimeType"`
+	InlineData *VeoInlineData `json:"inlineData,omitempty"`
 }
 
 // VeoInstance represents a single instance in the Veo predictLongRunning request.
 type VeoInstance struct {
-	Prompt string         `json:"prompt"`
-	Image  *VeoImageInput `json:"image,omitempty"`
-	// TODO: support referenceImages (style/asset references, up to 3 images)
-	// TODO: support lastFrame (first+last frame interpolation, Veo 3.1)
+	Prompt          string              `json:"prompt"`
+	Image           *VeoImageInput      `json:"image,omitempty"`
+	LastFrame       *VeoImageInput      `json:"lastFrame,omitempty"`
+	ReferenceImages []VeoReferenceImage `json:"referenceImages,omitempty"`
+}
+
+// VeoReferenceImage represents a Veo 3.1 reference image.
+type VeoReferenceImage struct {
+	Image         *VeoImageInput `json:"image,omitempty"`
+	ReferenceType string         `json:"referenceType,omitempty"`
 }
 
 // VeoParameters represents the parameters block for Veo predictLongRunning.
@@ -28,6 +39,7 @@ type VeoParameters struct {
 	ResizeMode         string `json:"resizeMode,omitempty"`
 	Seed               *int   `json:"seed,omitempty"`
 	GenerateAudio      *bool  `json:"generateAudio,omitempty"`
+	ResponseFormat     string `json:"responseFormat,omitempty"`
 }
 
 // VeoRequestPayload is the top-level request body for the Veo
@@ -57,10 +69,20 @@ type operationResponse struct {
 		BytesBase64Encoded    string           `json:"bytesBase64Encoded"`
 		Encoding              string           `json:"encoding"`
 		Video                 string           `json:"video"`
+		// GeneratedVideos supports two upstream response shapes:
+		// 1. Official Vertex/Gemini: response.generateVideoResponse.generatedVideos
+		// 2. Compatible implementations: response.generatedVideos (directly under response)
+		GeneratedVideos []struct {
+			Video struct {
+				URI         string `json:"uri"`
+				DownloadURI string `json:"downloadUri"`
+			} `json:"video"`
+		} `json:"generatedVideos"`
 		GenerateVideoResponse struct {
 			GeneratedVideos []struct {
 				Video struct {
-					URI string `json:"uri"`
+					URI         string `json:"uri"`
+					DownloadURI string `json:"downloadUri"`
 				} `json:"video"`
 			} `json:"generatedVideos"`
 		} `json:"generateVideoResponse"`

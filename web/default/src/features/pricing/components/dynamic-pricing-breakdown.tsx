@@ -47,6 +47,12 @@ import {
 type DynamicPricingBreakdownProps = {
   billingExpr: string | null | undefined
   /**
+   * Fixed base price for per-request expressions. When provided alongside
+   * request rule multipliers, displays the fixed price alongside the
+   * multiplier information.
+   */
+  basePrice?: string | null
+  /**
    * Label of the tier that fired for the current request. When provided,
    * the corresponding row is highlighted and tagged as "Matched". Used by
    * the usage-log details dialog to show which tier the engine selected.
@@ -155,6 +161,7 @@ function describeGroup(
 
 export function DynamicPricingBreakdown({
   billingExpr,
+  basePrice,
   matchedTierLabel,
   hideCacheColumns = false,
   compact = false,
@@ -240,6 +247,11 @@ export function DynamicPricingBreakdown({
           <div>
             <div className='text-foreground text-base font-medium'>
               {t('Dynamic Pricing')}
+              {basePrice && (
+                <span className='ml-2 text-sm font-normal text-muted-foreground'>
+                  ({t('Base')}: ${basePrice}/{t('request')})
+                </span>
+              )}
             </div>
             <div className='text-muted-foreground text-xs'>
               {t('Prices vary by usage tier and request conditions')}

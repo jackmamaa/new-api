@@ -1,0 +1,40 @@
+# Caddyfile for new-api reverse proxy
+# 
+# Replace 'your-domain.com' with your actual domain
+# If using local testing without domain, remove 'tls' directive and use HTTP
+
+new.sysrv.net {
+    reverse_proxy new-api:3000
+    
+    # Enable TLS with automatic Let's Encrypt certificate
+    tls {
+        alpn http/1.1
+    }
+    
+    # CORS - Cross-Origin Resource Sharing (only for /v1* and /v1beta* paths)
+    @preflight {
+        method OPTIONS
+        path /v1*
+        path /v1beta*
+    }
+    handle @preflight {
+        header {
+            Access-Control-Allow-Origin "*"
+            Access-Control-Allow-Methods "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+            Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With, Accept, Origin"
+            Access-Control-Max-Age "86400"
+            Access-Control-Allow-Credentials "true"
+        }
+        respond "" 204
+    }
+    
+    # Optional: Log requests
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+# Redirect HTTP to HTTPS (optional)
+http:// {
+    reverse_proxy new-api:3000
+}

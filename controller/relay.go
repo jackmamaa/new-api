@@ -571,12 +571,11 @@ func RelayTask(c *gin.Context) {
 		logger.LogInfo(c, retryLogStr)
 	}
 
-	// ── 成功：结算 + 日志 + 插入任务 ──
+	// ── 成功：结算 + 插入任务（消费日志延迟到轮询成功时记录）──
 	if taskErr == nil {
 		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 			common.SysError("settle task billing error: " + settleErr.Error())
 		}
-		service.LogTaskConsumption(c, relayInfo)
 
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID

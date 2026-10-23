@@ -167,6 +167,11 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 
+	// ── 表达式计费（含请求规则） ──
+	if billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModeTieredExpr {
+		return modelPriceHelperPerCallTiered(c, info, groupRatioInfo)
+	}
+
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
 	usePrice := success
 	var modelRatio float64
@@ -219,6 +224,71 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		ModelRatio:     modelRatio,
 		UsePrice:       usePrice,
 		Quota:          quota,
+		GroupRatioInfo: groupRatioInfo,
+	}
+	return priceData, nil
+}
+
+// modelPriceHelperPerCallTiered handles tiered_expr billing for per-call (task) requests.
+// Unlike modelPriceHelperTiered (which uses token counts), per-call expressions
+// are typically fixed-price with request-rule multipliers, so p/c/len are set to 0.
+func modelPriceHelperPerCallTiered(c *gin.Context, info *relaycommon.RelayInfo, groupRatioInfo types.GroupRatioInfo) (types.PriceData, error) {
+	exprStr, ok := billing_setting.GetBillingExpr(info.OriginModelName)
+	if !ok {
+		return types.PriceData{}, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", info.OriginModelName)
+	}
+
+	requestInput, err := ResolveIncomingBillingExprRequestInput(c, info)
+	if err != nil {
+		return types.PriceData{}, err
+	}
+
+	// Per-call expressions don't use token counts; run with zeros so that
+	// fixed-price expressions like tier("base", N) still produce N.
+	rawCost, trace, err := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{}, requestInput)
+	if err != nil {
+		return types.PriceData{}, fmt.Errorf("model %s tiered expr run failed: %w", info.OriginModelName, err)
+	}
+
+	quotaBeforeGroup := rawCost / 1_000_000 * common.QuotaPerUnit
+	preConsumedQuota := billingexpr.QuotaRound(quotaBeforeGroup * groupRatioInfo.GroupRatio)
+
+	freeModel := false
+	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
+		if groupRatioInfo.GroupRatio == 0 || rawCost == 0 {
+			preConsumedQuota = 0
+			freeModel = true
+		}
+	}
+
+	exprHash := billingexpr.ExprHashString(exprStr)
+	snapshot := &billingexpr.BillingSnapshot{
+		BillingMode:               billing_setting.BillingModeTieredExpr,
+		ModelName:                 info.OriginModelName,
+		ExprString:                exprStr,
+		ExprHash:                  exprHash,
+		GroupRatio:                groupRatioInfo.GroupRatio,
+		EstimatedPromptTokens:     0,
+		EstimatedCompletionTokens: 0,
+		EstimatedQuotaBeforeGroup: quotaBeforeGroup,
+		EstimatedQuotaAfterGroup:  preConsumedQuota,
+		EstimatedTier:             trace.MatchedTier,
+		QuotaPerUnit:              common.QuotaPerUnit,
+		ExprVersion:               billingexpr.ExprVersion(exprStr),
+	}
+	info.TieredBillingSnapshot = snapshot
+	info.BillingRequestInput = &requestInput
+
+	// Convert rawCost (expression output, e.g. priceUSD * 1_000_000) back to
+	// USD for display in the log.  The frontend uses formatBillingCurrencyFromUSD
+	// to render model_price, so it must be a USD value, not the raw expression cost.
+	modelPriceUSD := rawCost / 1_000_000
+
+	priceData := types.PriceData{
+		FreeModel:      freeModel,
+		ModelPrice:     modelPriceUSD,
+		UsePrice:       true,
+		Quota:          preConsumedQuota,
 		GroupRatioInfo: groupRatioInfo,
 	}
 	return priceData, nil

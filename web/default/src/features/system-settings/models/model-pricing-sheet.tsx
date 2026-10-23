@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { AlertTriangle, Save } from 'lucide-react'
+import { AlertTriangle, Plus, Save } from 'lucide-react'
 import {
   forwardRef,
   useCallback,
@@ -81,7 +81,17 @@ import {
 } from './model-pricing-core'
 import { PriceInput, PriceLane } from './model-pricing-inputs'
 import { formatPricingNumber } from './pricing-format'
-import { TieredPricingEditor } from './tiered-pricing-editor'
+import { RuleGroupCard, TieredPricingEditor } from './tiered-pricing-editor'
+import type { RequestRuleGroup } from './tiered-pricing-editor'
+import {
+  buildRequestRuleExpr,
+  createEmptyRuleGroup,
+  tryParseRequestRuleExpr,
+} from '@/features/pricing/lib/billing-expr'
+import {
+  buildPerRequestExpr,
+  tryParsePerRequestExpr,
+} from './model-pricing-core'
 
 export type { ModelRatioData } from './model-pricing-core'
 
@@ -155,6 +165,9 @@ export const ModelPricingEditorPanel = forwardRef<
   })
   const [billingExpr, setBillingExpr] = useState('')
   const [requestRuleExpr, setRequestRuleExpr] = useState('')
+  const [requestRuleGroups, setRequestRuleGroups] = useState<
+    RequestRuleGroup[]
+  >([])
   const [editorReloadToken, setEditorReloadToken] = useState(0)
   const isEditMode = !!editData
 
@@ -188,15 +201,36 @@ export const ModelPricingEditorPanel = forwardRef<
         audioRatio: editData.audioRatio || '',
         audioCompletionRatio: editData.audioCompletionRatio || '',
       })
-      setPricingMode(
+
+      // Check if this is a tiered_expr model saved with a per-request
+      // expression pattern (price + request rules).
+      const perRequestParsed =
         editData.billingMode === 'tiered_expr'
-          ? 'tiered_expr'
-          : editData.price
-            ? 'per-request'
-            : 'per-token'
-      )
-      setBillingExpr(editData.billingExpr || '')
-      setRequestRuleExpr(editData.requestRuleExpr || '')
+          ? tryParsePerRequestExpr(editData.billingExpr || '')
+          : null
+
+      if (perRequestParsed) {
+        setPricingMode('per-request')
+        form.setValue('price', perRequestParsed.price)
+        setBillingExpr('')
+        setRequestRuleExpr(perRequestParsed.requestRuleExpr)
+        setRequestRuleGroups(
+          tryParseRequestRuleExpr(perRequestParsed.requestRuleExpr) || []
+        )
+      } else {
+        setPricingMode(
+          editData.billingMode === 'tiered_expr'
+            ? 'tiered_expr'
+            : editData.price
+              ? 'per-request'
+              : 'per-token'
+        )
+        setBillingExpr(editData.billingExpr || '')
+        setRequestRuleExpr(editData.requestRuleExpr || '')
+        setRequestRuleGroups(
+          tryParseRequestRuleExpr(editData.requestRuleExpr || '') || []
+        )
+      }
     } else {
       form.reset({
         name: '',
@@ -212,6 +246,7 @@ export const ModelPricingEditorPanel = forwardRef<
       setPricingMode('per-token')
       setBillingExpr('')
       setRequestRuleExpr('')
+      setRequestRuleGroups([])
     }
 
     setPromptPrice(nextLaneState.promptPrice)
@@ -338,6 +373,10 @@ export const ModelPricingEditorPanel = forwardRef<
     if (nextMode === 'tiered_expr' && !billingExpr) {
       setBillingExpr('tier("base", p * 0 + c * 0)')
     }
+    if (nextMode !== 'per-request') {
+      setRequestRuleExpr('')
+      setRequestRuleGroups([])
+    }
   }
 
   const watchedValues = form.watch()
@@ -455,6 +494,10 @@ export const ModelPricingEditorPanel = forwardRef<
 
       if (pricingMode === 'tiered_expr') {
         data.billingExpr = billingExpr
+        data.requestRuleExpr = requestRuleExpr
+      }
+
+      if (pricingMode === 'per-request' && requestRuleExpr) {
         data.requestRuleExpr = requestRuleExpr
       }
 
@@ -636,6 +679,80 @@ export const ModelPricingEditorPanel = forwardRef<
                           </FormItem>
                         )}
                       />
+
+                      {/* Request rule pricing section */}
+                      <div className='space-y-3 rounded-lg border p-3'>
+                        <div className='space-y-1'>
+                          <h4 className='text-sm font-medium'>
+                            {t('Request rule pricing')}
+                          </h4>
+                          <p className='text-muted-foreground text-xs'>
+                            {t(
+                              'When conditions match, the final price is multiplied by X. Multiple matches multiply together; values < 1 act as discounts.'
+                            )}
+                          </p>
+                        </div>
+
+                        {requestRuleGroups.map((group, groupIndex) => (
+                          <RuleGroupCard
+                            key={groupIndex}
+                            group={group}
+                            index={groupIndex}
+                            basePrice={toNumberOrNull(watchedValues.price) ?? undefined}
+                            onChange={(next) => {
+                              const updated = [...requestRuleGroups]
+                              updated[groupIndex] = next
+                              setRequestRuleGroups(updated)
+                              setRequestRuleExpr(
+                                buildRequestRuleExpr(updated)
+                              )
+                            }}
+                            onRemove={() => {
+                              const updated = requestRuleGroups.filter(
+                                (_, i) => i !== groupIndex
+                              )
+                              setRequestRuleGroups(updated)
+                              setRequestRuleExpr(
+                                buildRequestRuleExpr(updated)
+                              )
+                            }}
+                          />
+                        ))}
+
+                        <div className='flex items-center gap-2'>
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            className='h-9 w-36 justify-center'
+                            onClick={() => {
+                              const updated = [
+                                ...requestRuleGroups,
+                                createEmptyRuleGroup(),
+                              ]
+                              setRequestRuleGroups(updated)
+                              setRequestRuleExpr(
+                                buildRequestRuleExpr(updated)
+                              )
+                            }}
+                          >
+                            <Plus className='mr-2 h-4 w-4' />
+                            {t('Add rule group')}
+                          </Button>
+                          {requestRuleGroups.length > 0 && (
+                            <Button
+                              variant='ghost'
+                              size='sm'
+                              className='h-9 text-xs'
+                              onClick={() => {
+                                setRequestRuleGroups([])
+                                setRequestRuleExpr('')
+                              }}
+                            >
+                              {t('Clear all')}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
                     </FieldGroup>
                   </TabsContent>
 

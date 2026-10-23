@@ -51,14 +51,46 @@ func BuildBillingExprRequestInputFromRequest(request dto.Request, headers map[st
 }
 
 func readIncomingBillingExprBody(c *gin.Context) ([]byte, error) {
-	if c == nil || c.Request == nil || !isJSONContentType(c.Request.Header.Get("Content-Type")) {
+	if c == nil || c.Request == nil {
 		return nil, nil
 	}
-	storage, err := common.GetBodyStorage(c)
-	if err != nil {
-		return nil, err
+	contentType := c.Request.Header.Get("Content-Type")
+
+	// JSON body – straightforward.
+	if isJSONContentType(contentType) {
+		storage, err := common.GetBodyStorage(c)
+		if err != nil {
+			return nil, err
+		}
+		return storage.Bytes()
 	}
-	return storage.Bytes()
+
+	// Multipart form – convert text fields into a lightweight JSON object so
+	// that the billing expression engine's param() function can query them.
+	if isMultipartContentType(contentType) {
+		form, err := common.ParseMultipartFormReusable(c)
+		if err != nil {
+			return nil, err
+		}
+		// Build a JSON object from the text fields (skip file fields).
+		kv := make(map[string]string, len(form.Value))
+		for field, values := range form.Value {
+			if len(values) > 0 {
+				kv[field] = values[0]
+			}
+		}
+		if len(kv) == 0 {
+			return nil, nil
+		}
+		return common.Marshal(kv)
+	}
+
+	return nil, nil
+}
+
+func isMultipartContentType(contentType string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	return strings.HasPrefix(contentType, "multipart/form-data")
 }
 
 func cloneRequestInput(src billingexpr.RequestInput) billingexpr.RequestInput {

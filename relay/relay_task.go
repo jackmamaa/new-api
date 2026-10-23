@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -145,6 +146,20 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitResult, *dto.TaskError) {
 	info.InitChannelMeta(c)
 
+	// 在解析请求体之前，先应用渠道参数覆盖到原始请求体。
+	// 这确保覆盖后的参数（如 metadata.durationSeconds=8）能在计费计算和上游请求中同时生效。
+	if storage, err := common.GetBodyStorage(c); err == nil {
+		if originBody, err := storage.Bytes(); err == nil && len(originBody) > 0 {
+			if overridden, err := relaycommon.ApplyParamOverrideWithRelayInfo(originBody, info); err == nil {
+				storage.Close()
+				if newStorage, err := common.CreateBodyStorage(overridden); err == nil {
+					c.Set(common.KeyBodyStorage, newStorage)
+					c.Request.Body = io.NopCloser(newStorage)
+				}
+			}
+		}
+	}
+
 	// 1. 确定 platform → 创建适配器 → 验证请求
 	platform := constant.TaskPlatform(c.GetString("platform"))
 	if platform == "" {
@@ -245,7 +260,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, taskErr
 	}
 
-	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
+	// 12. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
 		// 基于调整后的 ratios 重新计算 quota
@@ -476,6 +491,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 
 	snap := task.Snapshot()
 
+	now := time.Now().Unix()
 	// 将上游最新状态更新到 task
 	if ti.Status != "" {
 		task.Status = model.TaskStatus(ti.Status)
@@ -483,17 +499,40 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	if ti.Progress != "" {
 		task.Progress = ti.Progress
 	}
-	if strings.HasPrefix(ti.Url, "data:") {
+	// ti.Url is used by Vertex (data URI), ti.RemoteUrl is used by Gemini (remote URL).
+	effectiveUrl := ti.RemoteUrl
+	if effectiveUrl == "" {
+		effectiveUrl = ti.Url
+	}
+	if strings.HasPrefix(effectiveUrl, "data:") {
 		// data: URI — kept in Data, not ResultURL
-	} else if ti.Url != "" {
-		task.PrivateData.ResultURL = ti.Url
+	} else if effectiveUrl != "" {
+		task.PrivateData.ResultURL = effectiveUrl
 	} else if task.Status == model.TaskStatusSuccess {
 		// No URL from adaptor — construct proxy URL using public task ID
 		task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
 	}
 
+	// 更新任务时间戳
+	if task.Status == model.TaskStatusInProgress && task.StartTime == 0 {
+		task.StartTime = now
+	}
+	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
+		if task.FinishTime == 0 {
+			task.FinishTime = now
+		}
+	}
+
 	if !snap.Equal(task.Snapshot()) {
 		_, _ = task.UpdateWithStatus(snap.Status)
+	}
+
+	// 任务首次到达终态时记录消费日志（与轮询路径 recordTaskConsumeLog 等效）
+	// 此时 task 已被 tryRealtimeFetch 更新为终态，后续轮询不会再次处理，
+	// 因此必须在此处记录，否则使用日志会丢失。
+	// 用 snap.Status 判断仅首次到达时记录，避免重复日志。
+	if task.Status == model.TaskStatusSuccess && snap.Status != model.TaskStatusSuccess {
+		recordTaskConsumeLogDirect(task)
 	}
 
 	// OpenAI Video API 由调用者的 ConvertToOpenAIVideo 分支处理
@@ -544,6 +583,51 @@ func detectVideoFormat(rawBody []byte) string {
 }
 
 // mapTaskStatusToSimple 将内部 TaskStatus 映射为简化状态字符串
+// recordTaskConsumeLogDirect 在 tryRealtimeFetch 中直接记录消费日志。
+// 此时 task 已被更新为终态，轮询不会再处理，因此必须在此记录。
+func recordTaskConsumeLogDirect(task *model.Task) {
+	modelName := ""
+	if task.Properties.OriginModelName != "" {
+		modelName = task.Properties.OriginModelName
+	} else if bc := task.PrivateData.BillingContext; bc != nil && bc.OriginModelName != "" {
+		modelName = bc.OriginModelName
+	}
+
+	other := map[string]interface{}{
+		"is_task": true,
+		"task_id": task.TaskID,
+	}
+	if bc := task.PrivateData.BillingContext; bc != nil {
+		other["model_price"] = bc.ModelPrice
+		if bc.ModelRatio > 0 {
+			other["model_ratio"] = bc.ModelRatio
+		}
+		other["group_ratio"] = bc.GroupRatio
+		for k, v := range bc.OtherRatios {
+			other[k] = v
+		}
+	}
+
+	useTimeSeconds := 0
+	if task.SubmitTime > 0 && task.FinishTime > 0 {
+		useTimeSeconds = int(task.FinishTime - task.SubmitTime)
+	}
+
+	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+		UserId:         task.UserId,
+		LogType:        model.LogTypeConsume,
+		Content:        fmt.Sprintf("操作 %s", task.Action),
+		ChannelId:      task.ChannelId,
+		ModelName:      modelName,
+		Quota:          task.Quota,
+		TokenId:        task.PrivateData.TokenId,
+		Group:          task.Group,
+		Other:          other,
+		NodeName:       task.PrivateData.NodeName,
+		UseTimeSeconds: useTimeSeconds,
+	})
+}
+
 func mapTaskStatusToSimple(status model.TaskStatus) string {
 	switch status {
 	case model.TaskStatusSuccess:

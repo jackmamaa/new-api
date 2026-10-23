@@ -275,6 +275,7 @@ export interface TaskLog {
   progress_message_en?: string
   data?: string // JSON string
   fail_reason?: string
+  result_url?: string // 任务结果 URL（视频地址等）
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
   other?: string
   created_at?: number

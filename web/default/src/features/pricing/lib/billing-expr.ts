@@ -482,8 +482,20 @@ function tryParseRuleGroupFactor(part: string): RequestRuleGroup | null {
 
   const andParts = splitTopLevelAnd(conditionStr)
   const conditions: RequestCondition[] = []
-  for (const ap of andParts) {
-    const cond = tryParseRequestCondition(ap.trim())
+  for (let i = 0; i < andParts.length; i += 1) {
+    // Param comparison/contains conditions are emitted as
+    // `param(x) != nil && <check on param(x)>`, which splitTopLevelAnd cuts in
+    // two. Try the adjacent pair as one condition before parsing a lone part.
+    const pair =
+      i + 1 < andParts.length
+        ? tryParseRequestCondition(`${andParts[i]} && ${andParts[i + 1]}`)
+        : null
+    if (pair) {
+      conditions.push(pair)
+      i += 1
+      continue
+    }
+    const cond = tryParseRequestCondition(andParts[i].trim())
     if (!cond) return null
     conditions.push(cond)
   }
@@ -689,10 +701,12 @@ export function normalizeCondition(
 
 function buildExprLiteral(mode: string, value: string): string {
   const text = String(value || '').trim()
-  if (mode === MATCH_CONTAINS) return JSON.stringify(text)
+  if (mode === MATCH_CONTAINS) return JSON.stringify(text.toLowerCase())
   if (text === 'true' || text === 'false') return text
   if (NUMERIC_LITERAL_REGEX.test(text)) return text
-  return JSON.stringify(text)
+  // Lowercase string literals for case-insensitive matching against the
+  // lowercased values returned by param()/header() in the backend.
+  return JSON.stringify(text.toLowerCase())
 }
 
 function buildTimeConditionExpr(cond: TimeCondition): string {

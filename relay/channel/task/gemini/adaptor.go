@@ -85,6 +85,17 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			info.Action = constant.TaskActionGenerate
 		}
 	}
+	features, err := ApplyVeoMetadataToInstance(req.Metadata, &instance)
+	if err != nil {
+		return nil, err
+	}
+	if features.HasLastFrame {
+		info.Action = constant.TaskActionFirstTailGenerate
+	} else if features.HasReferenceImages {
+		info.Action = constant.TaskActionReferenceGenerate
+	} else if features.HasImage {
+		info.Action = constant.TaskActionGenerate
+	}
 
 	params := &VeoParameters{}
 	if err := taskcommon.UnmarshalMetadata(req.Metadata, params); err != nil {
@@ -234,8 +245,18 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 
 	ti.TaskID = taskcommon.EncodeLocalTaskID(op.Name)
 
-	if len(op.Response.GenerateVideoResponse.GeneratedVideos) > 0 {
-		if uri := op.Response.GenerateVideoResponse.GeneratedVideos[0].Video.URI; uri != "" {
+	// Try official path first (response.generateVideoResponse.generatedVideos),
+	// then fall back to compatible path (response.generatedVideos).
+	videos := op.Response.GenerateVideoResponse.GeneratedVideos
+	if len(videos) == 0 {
+		videos = op.Response.GeneratedVideos
+	}
+	if len(videos) > 0 {
+		uri := videos[0].Video.URI
+		if uri == "" {
+			uri = videos[0].Video.DownloadURI
+		}
+		if uri != "" {
 			ti.RemoteUrl = uri
 		}
 	}

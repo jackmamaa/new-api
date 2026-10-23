@@ -73,6 +73,42 @@ export type PreviewRow = {
 
 export const numericDraftRegex = /^(\d+(\.\d*)?|\.\d*)?$/
 
+/** Factor to convert a per-request USD price into the expression engine's raw cost unit.
+ *  Expression engine divides by 1_000_000 and multiplies by QuotaPerUnit, so
+ *  price * PER_REQUEST_EXPR_UNIT / 1_000_000 * QuotaPerUnit = price * QuotaPerUnit. */
+export const PER_REQUEST_EXPR_UNIT = 1_000_000
+
+/** Build a billing expression that represents a fixed per-request price.
+ *  Pattern: tier("base", price * PER_REQUEST_EXPR_UNIT)
+ *  When combined with request rules: (tier("base", price * PER_REQUEST_EXPR_UNIT)) * rules */
+export function buildPerRequestExpr(priceUsd: string): string {
+  const price = toNumberOrNull(priceUsd)
+  if (price === null) return ''
+  // Use integer arithmetic to avoid float precision issues
+  return `tier("base", ${formatPricingNumber(price * PER_REQUEST_EXPR_UNIT)})`
+}
+
+/** Try to parse a per-request expression back into price + requestRules.
+ *  Returns null if the expression doesn't match the per-request pattern. */
+export function tryParsePerRequestExpr(
+  billingExpr: string
+): { price: string; requestRuleExpr: string } | null {
+  if (!billingExpr) return null
+  // Pattern: tier("base", N) or (tier("base", N)) * rules
+  // Where N = price * PER_REQUEST_EXPR_UNIT
+  const tierMatch = billingExpr.match(
+    /^\(?\s*tier\s*\(\s*"base"\s*,\s*([\d.]+)\s*\)\s*\)?\s*(?:\*\s*(.+))?$/
+  )
+  if (!tierMatch) return null
+  const rawCost = toNumberOrNull(tierMatch[1])
+  if (rawCost === null || rawCost <= 0) return null
+
+  const price = formatPricingNumber(rawCost / PER_REQUEST_EXPR_UNIT)
+  const requestRuleExpr = (tierMatch[2] || '').trim()
+
+  return { price, requestRuleExpr }
+}
+
 export const EMPTY_LANE_PRICES: Record<LaneKey, string> = {
   completion: '',
   cache: '',
@@ -231,13 +267,22 @@ export function buildPreviewRows(
   }
 
   if (mode === 'per-request') {
-    return [
+    const rows: PreviewRow[] = [
       {
         key: 'price',
         label: 'ModelPrice',
         value: values.price || t('Empty'),
       },
     ]
+    if (requestRuleExpr) {
+      rows.push({
+        key: 'requestRules',
+        label: t('Request rules'),
+        value: requestRuleExpr,
+        multiline: true,
+      })
+    }
+    return rows
   }
 
   return [

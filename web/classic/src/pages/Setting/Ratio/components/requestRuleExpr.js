@@ -360,8 +360,20 @@ function tryParseRuleGroupFactor(part) {
 
   const andParts = splitTopLevelAnd(conditionStr);
   const conditions = [];
-  for (const ap of andParts) {
-    const cond = tryParseRequestCondition(ap.trim());
+  for (let i = 0; i < andParts.length; i += 1) {
+    // Param comparison/contains conditions are emitted as
+    // `param(x) != nil && <check on param(x)>`, which splitTopLevelAnd cuts in
+    // two. Try the adjacent pair as one condition before parsing a lone part.
+    const pair =
+      i + 1 < andParts.length
+        ? tryParseRequestCondition(`${andParts[i]} && ${andParts[i + 1]}`)
+        : null;
+    if (pair) {
+      conditions.push(normalizeCondition(pair));
+      i += 1;
+      continue;
+    }
+    const cond = tryParseRequestCondition(andParts[i].trim());
     if (!cond) return null;
     conditions.push(normalizeCondition(cond));
   }

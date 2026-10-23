@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -43,6 +44,10 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["model_ratio"] = info.PriceData.ModelRatio
 	}
 	other["group_ratio"] = info.PriceData.GroupRatioInfo.GroupRatio
+	if snap := info.TieredBillingSnapshot; snap != nil {
+		other["billing_mode"] = "tiered_expr"
+		other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
+	}
 	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
 		other["user_group_ratio"] = info.PriceData.GroupRatioInfo.GroupSpecialRatio
 	}

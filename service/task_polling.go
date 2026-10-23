@@ -462,7 +462,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return fmt.Errorf("readAll failed for task %s: %w", taskId, err)
 	}
 
-	logger.LogDebug(ctx, "updateVideoSingleTask response: %s", responseBody)
+	logger.LogInfo(ctx, fmt.Sprintf("updateVideoSingleTask response: %s", responseBody))
 
 	snap := task.Snapshot()
 
@@ -484,7 +484,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 
 	task.Data = redactVideoResponseBody(responseBody)
 
-	logger.LogDebug(ctx, "updateVideoSingleTask taskResult: %+v", taskResult)
+	logger.LogInfo(ctx, fmt.Sprintf("updateVideoSingleTask taskResult: %+v", taskResult))
 
 	now := time.Now().Unix()
 	if taskResult.Status == "" {
@@ -529,17 +529,25 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
-		if strings.HasPrefix(taskResult.Url, "data:") {
+		// taskResult.Url is used by Vertex (data URI), taskResult.RemoteUrl is used by Gemini (remote URL).
+		effectiveUrl := taskResult.RemoteUrl
+		if effectiveUrl == "" {
+			effectiveUrl = taskResult.Url
+		}
+		if strings.HasPrefix(effectiveUrl, "data:") {
 			// data: URI (e.g. Vertex base64 encoded video) — keep in Data, not in ResultURL
 			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
-		} else if taskResult.Url != "" {
-			// Direct upstream URL (e.g. Kling, Ali, Doubao, etc.)
-			task.PrivateData.ResultURL = taskResult.Url
+		} else if effectiveUrl != "" {
+			// Direct upstream URL (e.g. Kling, Ali, Doubao, Gemini, etc.)
+			task.PrivateData.ResultURL = effectiveUrl
 		} else {
 			// No URL from adaptor — construct proxy URL using public task ID
 			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
 		}
-		shouldSettle = true
+		// 仅在首次到达 SUCCESS 时设置 shouldSettle，避免重复记日志
+		if snap.Status != model.TaskStatusSuccess {
+			shouldSettle = true
+		}
 	case model.TaskStatusFailure:
 		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", taskId), task)
 		task.Status = model.TaskStatusFailure
@@ -578,11 +586,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 	} else {
 		// No changes, skip update
-		logger.LogDebug(ctx, "No update needed for task %s", task.TaskID)
+		logger.LogInfo(ctx, fmt.Sprintf("No update needed for task %s", task.TaskID))
 	}
 
 	if shouldSettle {
 		settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
+		// 任务成功时才记录消费日志（带 submit_time→finish_time 的真实耗时）
+		recordTaskConsumeLog(ctx, task)
 	}
 	if shouldRefund {
 		RefundTaskQuota(ctx, task, task.FailReason)
@@ -648,3 +658,36 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	}
 	// 3. 无调整，保持预扣额度
 }
+
+// recordTaskConsumeLog 在任务成功时记录消费日志。
+// 使用 task 中的 submit_time/finish_time 计算耗时，而非提交时的 0。
+func recordTaskConsumeLog(ctx context.Context, task *model.Task) {
+	modelName := taskModelName(task)
+	other := taskBillingOther(task)
+	other["task_id"] = task.TaskID
+	other["is_task"] = true
+
+	// 计算耗时（秒）
+	useTimeSeconds := 0
+	if task.SubmitTime > 0 && task.FinishTime > 0 {
+		useTimeSeconds = int(task.FinishTime - task.SubmitTime)
+	}
+
+	logger.LogInfo(ctx, fmt.Sprintf("recordTaskConsumeLog: task=%s, quota=%d, useTime=%ds, submit=%d, finish=%d",
+		task.TaskID, task.Quota, useTimeSeconds, task.SubmitTime, task.FinishTime))
+
+	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+		UserId:         task.UserId,
+		LogType:        model.LogTypeConsume,
+		Content:        fmt.Sprintf("操作 %s", task.Action),
+		ChannelId:      task.ChannelId,
+		ModelName:      modelName,
+		Quota:          task.Quota,
+		TokenId:        task.PrivateData.TokenId,
+		Group:          task.Group,
+		Other:          other,
+		NodeName:       task.PrivateData.NodeName,
+		UseTimeSeconds: useTimeSeconds,
+	})
+}
+

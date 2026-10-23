@@ -69,7 +69,7 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 			return value
 		},
 		"header": func(key string) string {
-			return headers[strings.ToLower(strings.TrimSpace(key))]
+			return strings.ToLower(headers[strings.ToLower(strings.TrimSpace(key))])
 		},
 		"param": func(path string) interface{} {
 			path = strings.TrimSpace(path)
@@ -80,13 +80,18 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 			if !result.Exists() {
 				return nil
 			}
-			return result.Value()
+			val := result.Value()
+			// Normalize string values to lowercase for case-insensitive matching.
+			if s, ok := val.(string); ok {
+				return strings.ToLower(s)
+			}
+			return val
 		},
 		"has": func(source interface{}, substr string) bool {
 			if source == nil || substr == "" {
 				return false
 			}
-			return strings.Contains(fmt.Sprint(source), substr)
+			return strings.Contains(strings.ToLower(fmt.Sprint(source)), strings.ToLower(substr))
 		},
 		"hour":    func(tz string) int { return timeInZone(tz).Hour() },
 		"minute":  func(tz string) int { return timeInZone(tz).Minute() },
