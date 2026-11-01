@@ -159,6 +159,7 @@ import {
   findMissingModelsInMapping,
   validateModelMappingJson,
   hasAdvancedSettingsErrors,
+  hasResponseOverrideRules,
 } from '../../lib'
 import {
   collectInvalidStatusCodeEntries,
@@ -174,6 +175,7 @@ import {
 } from '../dialogs/missing-models-confirmation-dialog'
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
+import { ResponseOverrideEditor } from '../editors/response-override-editor'
 import { ModelMappingEditor } from '../model-mapping-editor'
 import {
   ChannelAdvancedSection,
@@ -267,6 +269,7 @@ const SENSITIVE_FORM_FIELDS = [
   'key_mode',
   'param_override',
   'header_override',
+  'response_override',
   'settings',
   'setting',
   'advanced_custom',
@@ -320,6 +323,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
   return Boolean(
     hasConfiguredOverrideValue(values.param_override) ||
     hasConfiguredOverrideValue(values.header_override) ||
+    hasResponseOverrideRules(values.response_override) ||
     values.advanced_custom?.trim() ||
     hasConfiguredOverrideValue(values.status_code_mapping) ||
     values.tag?.trim() ||
@@ -717,6 +721,7 @@ export function ChannelMutateDrawer({
   const currentStatusCodeMapping = form.watch('status_code_mapping')
   const currentParamOverride = form.watch('param_override')
   const currentHeaderOverride = form.watch('header_override')
+  const currentResponseOverride = form.watch('response_override')
   const currentForceFormat = form.watch('force_format')
   const currentThinkingToContent = form.watch('thinking_to_content')
   const currentPassThroughBodyEnabled = form.watch('pass_through_body_enabled')
@@ -920,7 +925,8 @@ export function ChannelMutateDrawer({
   const overrideRulesConfigured = Boolean(
     hasConfiguredOverrideValue(currentStatusCodeMapping) ||
     hasConfiguredOverrideValue(currentParamOverride) ||
-    hasConfiguredOverrideValue(currentHeaderOverride)
+    hasConfiguredOverrideValue(currentHeaderOverride) ||
+    hasResponseOverrideRules(currentResponseOverride)
   )
   const extraSettingsConfigured = Boolean(
     currentForceFormat ||
@@ -3893,6 +3899,35 @@ export function ChannelMutateDrawer({
                                       </code>{' '}
                                       — {t('Client header value')}
                                     </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='response_override'
+                                render={({ field }) => (
+                                  <FormItem className='space-y-3 border-t pt-4'>
+                                    <div className='space-y-1'>
+                                      <FormLabel>
+                                        {t('Response Override')}
+                                      </FormLabel>
+                                      <FormDescription>
+                                        {t(
+                                          'Replace keywords in upstream response bodies. Optionally require a request parameter to match first.'
+                                        )}
+                                      </FormDescription>
+                                    </div>
+                                    <FormControl>
+                                      <ResponseOverrideEditor
+                                        value={field.value || ''}
+                                        onChange={field.onChange}
+                                        disabled={
+                                          sensitiveLocked || isSubmitting
+                                        }
+                                      />
+                                    </FormControl>
                                     <FormMessage />
                                   </FormItem>
                                 )}

@@ -962,6 +962,9 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
+	if err := dto.ValidateResponseOverrideRules(channelOtherSettings.ResponseOverride); err != nil {
+		return err
+	}
 	return nil
 }
 

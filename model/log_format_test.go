@@ -8,6 +8,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestFormatUserLogsStripsModelMapping verifies the model mapping indicator
+// (request model -> upstream model) is removed for non-admin log views, since
+// it reveals upstream routing that only admins should see.
+func TestFormatUserLogsStripsModelMapping(t *testing.T) {
+	other := common.MapToJsonStr(map[string]interface{}{
+		"model_price":         0.004,
+		"is_model_mapped":     true,
+		"upstream_model_name": "upstream-model",
+	})
+	logs := []*Log{{Other: other}}
+
+	formatUserLogs(logs, 0)
+
+	parsed, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	require.NotContains(t, parsed, "is_model_mapped")
+	require.NotContains(t, parsed, "upstream_model_name")
+	// Non-admin billing fields remain visible.
+	require.Contains(t, parsed, "model_price")
+}
+
 // TestFormatUserLogsStripsQuotaSaturation verifies the admin-only quota
 // saturation marker (nested under other.admin_info) is removed for non-admin
 // log views, since formatUserLogs strips the whole admin_info object.

@@ -31,6 +31,12 @@ import {
   stringifyAdvancedCustomConfig,
   validateAdvancedCustomConfig,
 } from './advanced-custom'
+import {
+  getResponseOverrideValidationError,
+  normalizeResponseOverrideRules,
+  normalizeResponseOverrideRulesForSave,
+  stringifyResponseOverrideRules,
+} from './response-override'
 
 // ============================================================================
 // Form Validation Schema
@@ -178,6 +184,7 @@ export const channelFormSchema = z
       .optional()
       .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
     advanced_custom: z.string().optional(),
+    response_override: z.string().optional(),
     other: z.string().optional(),
     // Multi-key options (not sent to backend directly)
     multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
@@ -246,6 +253,13 @@ export const channelFormSchema = z
         'other',
         'This channel type requires additional configuration'
       )
+    }
+
+    const responseOverrideError = getResponseOverrideValidationError(
+      data.response_override
+    )
+    if (responseOverrideError) {
+      addRequiredIssue(ctx, 'response_override', responseOverrideError)
     }
 
     if (data.type === 57) {
@@ -349,6 +363,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
   advanced_custom: '',
+  response_override: '',
 }
 
 // ============================================================================
@@ -405,6 +420,7 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
+  let responseOverride = ''
 
   if (channel.settings) {
     try {
@@ -432,6 +448,11 @@ export function transformChannelToFormDefaults(
         : ''
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
+      }
+      if (parsed.response_override) {
+        responseOverride = stringifyResponseOverrideRules(
+          normalizeResponseOverrideRules(parsed.response_override)
+        )
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -484,6 +505,7 @@ export function transformChannelToFormDefaults(
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
     advanced_custom: advancedCustom,
+    response_override: responseOverride,
   }
 }
 
@@ -620,6 +642,15 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     }
   } else if ('advanced_custom' in settingsObj) {
     delete settingsObj.advanced_custom
+  }
+
+  const responseOverride = normalizeResponseOverrideRulesForSave(
+    formData.response_override
+  )
+  if (responseOverride.length > 0) {
+    settingsObj.response_override = responseOverride
+  } else if ('response_override' in settingsObj) {
+    delete settingsObj.response_override
   }
 
   return JSON.stringify(settingsObj)
